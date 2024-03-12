@@ -1,19 +1,17 @@
 import os
 import boto3
 import re
+import time
+
 from dotenv import load_dotenv
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from langchain_core.prompts import PromptTemplate
+from langchain_community.llms import Bedrock
+from langchain_community.retrievers import AmazonKnowledgeBasesRetriever 
+from langchain_core.runnables import RunnablePassthrough
 
 CHAT_UPDATE_INTERVAL_SEC = 1
-region = "us-east-1"
-modelId = "anthropic.claude-v2:1"
-knowledgebaseId = "YQMHXBRSRU"
-modelArn = f'arn:aws:bedrock:{region}::foundation-model/{modelId}'
-
-session = boto3.Session(region_name=region)
-client = session.client(service_name='bedrock-agent-runtime')
-
 
 load_dotenv()
 
@@ -21,6 +19,50 @@ app = App(
     signing_secret=os.environ["SLACK_SIGNING_SECRET"],
     token=os.environ["SLACK_BOT_TOKEN"],
     process_before_response=True
+)
+
+# ================================================================
+# Retrieve用のプロンプトの定義
+prompt_pre = PromptTemplate.from_template("""
+あなたはquestionから、検索ツールへの入力となる検索キーワードを考えます。
+questionに後続処理への指示（例：「説明して」「要約して」）が含まれる場合は取り除きます。
+検索キーワードは文章では無く簡潔な単語で指定します。
+検索キーワードは複数の単語を受け付ける事が出来ます。
+検索キーワードは日本語が標準ですが、ユーザー問い合わせに含まれている英単語はそのまま使用してください。
+回答形式は文字列です。
+<question>{question}</question>
+""")
+# ================================================================
+
+# ================================================================
+# 回答生成用のプロンプトの定義
+prompt_main = PromptTemplate.from_template("""
+あなたはcontextを参考に、questionに回答します。
+<context>{context}</context>
+<question>{question}</question>
+""")
+# ================================================================
+
+# LLMの定義
+LLM = Bedrock(
+    model_id="anthropic.claude-instant-v1",
+    model_kwargs={"max_tokens_to_sample": 1000},
+)
+
+# Retriever(Kendra)の定義（Kendra Index ID、言語、取得件数）
+retriever = AmazonKnowledgeBasesRetriever(
+    knowledge_base_id=os.environ["KNOWLEDGE_BASE_ID"],
+    retrieval_config={
+        "vectorSearchConfiguration": {
+            "numberOfResults": 4
+        }
+    },
+)
+# chainの定義
+chain = (
+    {"context": prompt_pre | LLM | retriever, "question":  RunnablePassthrough()}
+    | prompt_main 
+    | LLM
 )
 
 
@@ -35,23 +77,47 @@ def handle_mention(event, say):
     
     for_update_ts = result["ts"]
     
-    response = client.retrieve_and_generate(
-        input={
-            'text': messasge
-        },
-        retrieveAndGenerateConfiguration={
-            'type': 'KNOWLEDGE_BASE',
-            'knowledgeBaseConfiguration': {
-                'knowledgeBaseId': knowledgebaseId,
-                'modelArn': modelArn,
-            },
-        },
-    )
     
-    output_text = response['output']['text']
+    # chainの実行
+    output_text = ""
+    last_send_time = time.time()
+    interval = CHAT_UPDATE_INTERVAL_SEC
+    update_count = 0
+    for chunk in chain.stream({"question": messasge}):
+        output_text += chunk
+        now = time.time()
+        if now - last_send_time > interval:
+            last_send_time = now
+            update_count += 1
+            
+            app.client.chat_update(
+                channel=channel, ts=for_update_ts, text=f"{output_text}..."
+            )
+            
+            # update_countが現在の更新間隔 x 10 より多くなるたびに更新間隔を2倍にする
+            if update_count / 10 > interval:
+                print("intervalの更新")
+                interval = interval * 2
+    # answer = chain.invoke({"question": messasge})
+    # print(answer)
+
+    # response = client.retrieve_and_generate(
+    #     input={
+    #         'text': messasge
+    #     },
+    #     retrieveAndGenerateConfiguration={
+    #         'type': 'KNOWLEDGE_BASE',
+    #         'knowledgeBaseConfiguration': {
+    #             'knowledgeBaseId': knowledgebaseId,
+    #             'modelArn': modelArn,
+    #         },
+    #     },
+    # )
+    
+    # output_text = response['output']['text']
 
     
-    message_context = "OpenAI APIで生成される情報は不正確または不適切な場合がありますが、当社の見解を述べるものではありません。"
+    message_context = "生成AIによって生成される情報は不正確または不適切な場合がありますが、当社の見解を述べるものではありません。"
     message_blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": output_text}},
         {"type": "divider"},
