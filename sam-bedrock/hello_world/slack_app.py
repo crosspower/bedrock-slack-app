@@ -45,7 +45,7 @@ prompt_main = PromptTemplate.from_template("""
 
 # LLMの定義
 LLM = Bedrock(
-    model_id="anthropic.claude-instant-v1",
+    model_id="anthropic.claude-v2:1",
     model_kwargs={"max_tokens_to_sample": 1000},
 )
 
@@ -64,7 +64,7 @@ chain = (
     | prompt_main 
     | LLM
 )
-
+# chain = {"context": retriever, "question": RunnablePassthrough()} | prompt_main | LLM
 
 # @app.event("app_mention")
 def handle_mention(event, say):
@@ -96,7 +96,6 @@ def handle_mention(event, say):
             
             # update_countが現在の更新間隔 x 10 より多くなるたびに更新間隔を2倍にする
             if update_count / 10 > interval:
-                print("intervalの更新")
                 interval = interval * 2
     # answer = chain.invoke({"question": messasge})
     # print(answer)
