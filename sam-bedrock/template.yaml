@@ -20,6 +20,32 @@ Resources:
       Runtime: python3.10
       Architectures:
       - x86_64
+      FunctionUrlConfig:
+        AuthType: NONE
+        InvokeMode: BUFFERED
+      MemorySize: 512
+      Timeout: 900
+      Policies:
+        - Version: '2012-10-17' # IAM ポリシーのバージョン
+          Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: "*"
+        - Version: '2012-10-17'
+          Statement:
+            - Sid: 'BedrockScopedAccess'
+              Effect: 'Allow'
+              Action: 'bedrock:InvokeModelWithResponseStream'
+              Resource:
+                  - 'arn:aws:bedrock:*::foundation-model/anthropic.claude-v2:1'
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:Retrieve
+              Resource: 'arn:aws:bedrock:us-east-1:233928981508:knowledge-base/'
+    
       # Events:
       #   HelloWorld:
       #     Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
