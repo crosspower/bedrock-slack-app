@@ -39,22 +39,29 @@ app = App(
 # ================================================================
 # Retrieve用のプロンプトの定義
 prompt_pre = PromptTemplate.from_template("""
-あなたはquestionから、検索ツールへの入力となる検索キーワードを考えます。
-questionに後続処理への指示（例：「説明して」「要約して」）が含まれる場合は取り除きます。
+あなたは質問から、検索ツールへの入力となる検索キーワードを考えます。
+質問に後続処理への指示（例：「説明して」「要約して」）が含まれる場合は取り除きます。
 検索キーワードは文章では無く簡潔な単語で指定します。
 検索キーワードは複数の単語を受け付ける事が出来ます。
 検索キーワードは日本語が標準ですが、ユーザー問い合わせに含まれている英単語はそのまま使用してください。
 回答形式は文字列です。
-<question>{question}</question>
+
+
+質問:{question}
 """)
 # ================================================================
 
 # ================================================================
 # 回答生成用のプロンプトの定義
 prompt_main = PromptTemplate.from_template("""
-あなたはcontextを参考に、questionに回答します。
-<context>{context}</context>
-<question>{question}</question>
+あなたは、以下の検索結果をもとに質問への回答を考えます。
+もし検索結果がある場合は、そのドキュメントの検索結果を基にして質問に対する回答をしてください。また、その際は回答の最初に、検索結果の情報がどのファイルの何ページに含まれているかを明記してください。
+
+もし検索結果がない場合は、ドキュメントに沿う質問を促すために、一言で回答をしてください。
+もし検索結果が不十分な場合は、ドキュメントに沿う質問を促すために、一言で回答をしてください。
+
+検索結果:{context}
+質問{question}
 """)
 # ================================================================
 
@@ -79,26 +86,23 @@ chain = (
     | prompt_main 
     | LLM
 )
-# chain = {"context": retriever, "question": RunnablePassthrough()} | prompt_main | LLM
 
 # @app.event("app_mention")
 def handle_mention(event, say):
     channel = event["channel"]
     thread_ts = event["ts"]
-    messasge = re.sub("<@.*>", "", event["text"])
+    message = re.sub("<@.*>", "", event["text"])
     
     # いったん書き込む
     result = say(f"\n\n{RETRIEVE_PROGRESS_MESSAGE}", thread_ts=thread_ts)
     
     for_update_ts = result["ts"]
     
-    
-    # chainの実行
     output_text = ""
     last_send_time = time.time()
     interval = CHAT_UPDATE_INTERVAL_SEC
     update_count = 0
-    for chunk in chain.stream({"question": messasge}):
+    for chunk in chain.stream({"question": message}):
         output_text += chunk
         now = time.time()
         if now - last_send_time > interval:
@@ -112,23 +116,6 @@ def handle_mention(event, say):
             # update_countが現在の更新間隔 x 10 より多くなるたびに更新間隔を2倍にする
             if update_count / 10 > interval:
                 interval = interval * 2
-    # answer = chain.invoke({"question": messasge})
-    # print(answer)
-
-    # response = client.retrieve_and_generate(
-    #     input={
-    #         'text': messasge
-    #     },
-    #     retrieveAndGenerateConfiguration={
-    #         'type': 'KNOWLEDGE_BASE',
-    #         'knowledgeBaseConfiguration': {
-    #             'knowledgeBaseId': knowledgebaseId,
-    #             'modelArn': modelArn,
-    #         },
-    #     },
-    # )
-    
-    # output_text = response['output']['text']
 
     
     message_context = RESTRICTION_MESSAGE
@@ -147,7 +134,6 @@ def handle_mention(event, say):
         text=output_text,
         blocks=message_blocks
     )
-    # say(thread_ts=thread_ts, text=output_text)
 
 def just_ack(ack):
     ack()
